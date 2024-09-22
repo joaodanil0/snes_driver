@@ -2,13 +2,18 @@
 #include <linux/cdev.h>
 #include <linux/err.h>
 #include <linux/gpio.h> 
-
+#include <linux/hrtimer.h>
+#include <linux/jiffies.h>
 
 #define GPIO_21 (533)
 
 dev_t dev = 0;
+u64 start_t;
+u64 start2_t;
 static struct cdev snes_cdev;
 static struct class *dev_class;
+static struct hrtimer my_hrtimer;
+static struct hrtimer my_hrtimer2;
 static ssize_t snes_write(struct file *filp, const char *buf, size_t len, loff_t * off);
 
 
@@ -48,6 +53,21 @@ static ssize_t snes_write(struct file *filp, const char *buf, size_t len, loff_t
   
 }
 
+static enum hrtimer_restart test_hrtimer_handler(struct hrtimer *timer) {
+
+  u64 now_t = jiffies;
+  printk("start_t - now_t = %ums\n", jiffies_to_msecs(now_t - start_t));
+  hrtimer_forward(timer,hrtimer_cb_get_time(timer),ktime_set(0,ms_to_ktime(100)));
+  return HRTIMER_RESTART;
+
+}
+
+static enum hrtimer_restart test2_hrtimer_handler(struct hrtimer *timer) {
+  u64 now_t = jiffies;
+  printk("start_t - now_t = %um s(2)\n", jiffies_to_msecs(now_t - start2_t));
+  hrtimer_forward(timer,hrtimer_cb_get_time(timer),ktime_set(0,ms_to_ktime(1000)));
+  return HRTIMER_RESTART;
+}
 static int __init snes_controller_init(void)
 {
   if((alloc_chrdev_region(&dev, 0, 1, "snes_Dev")) < 0 )
@@ -107,8 +127,17 @@ static int __init snes_controller_init(void)
 
   pr_info("Device Driver Initialized\n");
 
-
+  hrtimer_init(&my_hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+  my_hrtimer.function = &test_hrtimer_handler;
+  start_t = jiffies;
+  hrtimer_start(&my_hrtimer, ms_to_ktime(100), HRTIMER_MODE_REL);
  
+  hrtimer_init(&my_hrtimer2, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+  my_hrtimer2.function = &test2_hrtimer_handler;
+  start2_t = jiffies;
+  hrtimer_start(&my_hrtimer2, ms_to_ktime(1000), HRTIMER_MODE_REL); 
+
+  pr_info("Timer Initialized");
   return 0;
 }
 
@@ -120,7 +149,10 @@ static void __exit snes_controller_exit(void)
   class_destroy(dev_class);
   cdev_del(&snes_cdev);
   unregister_chrdev_region(dev, 1);
+  hrtimer_cancel(&my_hrtimer);
+  hrtimer_cancel(&my_hrtimer2);
   pr_info("Driver Removed\n");
+  
 }
 
 
