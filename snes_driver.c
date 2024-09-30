@@ -5,12 +5,20 @@
 #include <linux/hrtimer.h>
 #include <linux/jiffies.h>
 #include <linux/delay.h>
+#include <linux/input.h>
+#include <linux/interrupt.h>
+
+//#include <asm/irq.h>
+//#include <asm/io.h>
 
 // To find the correct gpio label, check /sys/kernel/debug/gpio
 #define GPIO_21 (533) // Clock pin
 #define GPIO_20 (532) // Latch pin
 #define GPIO_16 (528) // Data pin
+#define BUTTON_IRQ (538) // Interrput_pin
 
+static short int button_irq = 0;
+static struct input_dev *button_dev;
 int size_buttons = 9;
 int data_sent_counter = 0;
 dev_t dev = 0;
@@ -37,6 +45,14 @@ static struct file_operations fops =
 
 static int __init snes_controller_init(void);
 static void __exit snes_controller_exit(void);
+
+static irqreturn_t button_interrupt(int irq, void *dummy)
+{
+        printk("button_isr !!!!\n");
+        input_report_key(button_dev, BTN_0, 1);
+        input_sync(button_dev);
+        return IRQ_HANDLED;
+}
 
 static ssize_t snes_write(struct file *filp, const char *buf, size_t len, loff_t * off)
 {
@@ -79,6 +95,9 @@ static enum hrtimer_restart test_hrtimer_handler(struct hrtimer *timer) {
     }
     else{
       pr_info("Data received: %d %d %d %d %d %d %d %d %d\n", data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8]);
+      input_report_key(button_dev, BTN_0, 1);
+      input_sync(button_dev);
+
     }     
   }
   clk_state = !clk_state;
@@ -173,17 +192,30 @@ static int __init snes_controller_init(void)
     cdev_del(&snes_cdev);
     unregister_chrdev_region(dev,1);
     return -1;
-
-
   }
   
+  if(gpio_request(BUTTON_IRQ, "irq_button")  < 0)
+  {
+    pr_err("ERROR: GPIO %d request\n", BUTTON_IRQ);
+    gpio_free(BUTTON_IRQ);
+    device_destroy(dev_class,dev);
+    class_destroy(dev_class);
+    cdev_del(&snes_cdev);
+    unregister_chrdev_region(dev,1);
+    return -1; 
+  }
+  
+
   gpio_direction_output(GPIO_21, 0);
   gpio_direction_output(GPIO_20, 0);
   gpio_direction_input(GPIO_16);
+  gpio_direction_input(BUTTON_IRQ);
+  
   
   gpiod_export(gpio_to_desc(GPIO_16), false);
   gpiod_export(gpio_to_desc(GPIO_21), false);
   gpiod_export(gpio_to_desc(GPIO_20), false);
+  gpiod_export(gpio_to_desc(BUTTON_IRQ), false);
 
   pr_info("Device Driver Initialized\n");
 
@@ -197,6 +229,30 @@ static int __init snes_controller_init(void)
   start2_t = jiffies;
   hrtimer_start(&my_hrtimer2, ms_to_ktime(50), HRTIMER_MODE_REL); 
 
+
+  //if (request_irq(BUTTON_IRQ, button_interrupt, 0, "button", NULL)) {
+  //  printk(KERN_ERR "button.c: Can't allocate irq %d\n", button_irq);
+  //return -EBUSY;
+  //}
+  
+  button_dev = input_allocate_device();
+  if (!button_dev) {
+    printk(KERN_ERR "button.c: Not enough memory\n");
+    free_irq(BUTTON_IRQ, button_interrupt);
+    return -ENOMEM;
+  }
+ 
+  button_dev->evbit[0] = BIT_MASK(EV_KEY);
+  button_dev->keybit[BIT_WORD(BTN_0)] = BIT_MASK(BTN_0); 
+
+   
+  if (input_register_device(button_dev)) {
+    printk(KERN_ERR "button.c: Failed to register device\n");
+    input_free_device(button_dev);
+    free_irq(BUTTON_IRQ, button_interrupt);
+    return -1;
+  }
+   
   pr_info("Timer Initialized");
   return 0;
 }
@@ -215,6 +271,10 @@ static void __exit snes_controller_exit(void)
   unregister_chrdev_region(dev, 1);
   hrtimer_cancel(&my_hrtimer);
   hrtimer_cancel(&my_hrtimer2);
+
+  input_unregister_device(button_dev);  
+//  free_irq(BUTTON_IRQ, button_interrupt);
+
   pr_info("Driver Removed\n");
   
 }
