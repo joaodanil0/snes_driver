@@ -24,9 +24,11 @@ u64 start2_t;
 static struct hrtimer clk;
 static struct hrtimer latch;
 
-static int __init snes_controller_init(void);
-static void __exit snes_controller_exit(void);
+static struct input_dev *button_dev;
 
+static const short gc_snes_btn[] = {
+	BTN_A, BTN_B, BTN_X, BTN_Y, BTN_DPAD_UP, BTN_DPAD_DOWN, BTN_DPAD_RIGHT, BTN_DPAD_LEFT, BTN_START
+};
 
 static enum hrtimer_restart clk_handler(struct hrtimer *timer) {
 
@@ -49,6 +51,9 @@ static enum hrtimer_restart clk_handler(struct hrtimer *timer) {
       pr_info("Data received: %d %d %d %d %d %d %d %d %d\n", data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8]);
       //input_report_key(button_dev, BTN_0, 1);
       //input_sync(button_dev);
+      for (int j = 0; j < size_buttons; j++)
+        input_report_key(button_dev, gc_snes_btn[j], data[j]);
+      input_sync(button_dev);
     }
   }     
 
@@ -69,7 +74,7 @@ static enum hrtimer_restart latch_handler(struct hrtimer *timer) {
 static int __init snes_controller_init(void)
 {
   
-  if(gpio_request(GPIO_21, "LED_LOL") < 0)
+  if(gpio_request(GPIO_21, "SNES_CLK") < 0)
   {
     pr_err("ERROR: GPIO %d request\n", GPIO_21);
     gpio_free(GPIO_21);
@@ -98,7 +103,7 @@ static int __init snes_controller_init(void)
   gpiod_export(gpio_to_desc(GPIO_21), false);
   gpiod_export(gpio_to_desc(GPIO_20), false);
 
-  pr_info("Device Driver Initialized\n");
+  pr_info("GPIOs Initialized\n");
 
   hrtimer_init(&clk, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
   clk.function = &clk_handler;
@@ -109,8 +114,32 @@ static int __init snes_controller_init(void)
   latch.function = &latch_handler;
   start2_t = jiffies;
   hrtimer_start(&latch, ms_to_ktime(50), HRTIMER_MODE_REL); 
-   
-  pr_info("Timer Initialized");
+  
+  pr_info("Timers Initialized");
+  
+  button_dev = input_allocate_device();
+	if (!button_dev) {
+		printk(KERN_ERR "dummy_gpio_irq: Not enough memory\n");
+    return -ENOMEM;
+	}
+  
+  button_dev->name = "NES Controller";
+  button_dev->phys = "nescontroller/input0";
+    
+  set_bit(EV_KEY, button_dev->evbit);
+  
+  for (int i = 0; i < size_buttons; i++)
+		input_set_capability(button_dev, EV_KEY, gc_snes_btn[i]);
+  
+  int error = input_register_device(button_dev);
+  if (error) {
+		printk(KERN_ERR "dummy_gpio_irq: Failed to register device\n");
+		input_free_device(button_dev);
+    return error;
+  }
+  
+  pr_info("Driver Initialized");
+  
   return 0;
 }
 
@@ -124,6 +153,7 @@ static void __exit snes_controller_exit(void)
   gpio_free(GPIO_16);
   hrtimer_cancel(&clk);
   hrtimer_cancel(&latch);
+  input_unregister_device(button_dev);
   pr_info("Driver Removed\n");
   
 }
